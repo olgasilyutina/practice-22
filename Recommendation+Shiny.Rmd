@@ -15,7 +15,7 @@ library(recommenderlab)
 
 ```{r}
 data(MovieLense)
-MovieLense
+max(colCounts(MovieLense))
 ```
 
 * строка = пользователь, столбец = фильм, на пересечении -- оценки
@@ -131,7 +131,9 @@ ggtitle("Распределение средних оценок пользова
    * hint: загрузите данные и пакеты ДО функции, описывающей действия сервера
    
 ```{r eval = F}
+library(ggplot2)
 library(shiny)
+data(MovieLense)
 
 ui <- fluidPage(...)
 
