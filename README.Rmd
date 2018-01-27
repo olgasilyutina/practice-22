@@ -1,0 +1,6 @@
+---
+title: "README"
+output: html_document
+---
+
+The project of the fisrt glance at git and shiny
