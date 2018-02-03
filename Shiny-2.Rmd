@@ -1,0 +1,215 @@
+---
+title: "И снова Shiny"
+output: html_document
+---
+
+Сегодня мы продолжим работу с Shiny. 
+
+* рассмотрим еще раз, как преобразовать готовый код в приложение
+* посмотрим, как автоматически переносить данные (переменные, значения и т.д.) в интерфейс из датасета (а не перепечатывать вручную)
+* поговорим об оптимальности и структуре программы
+
+В качестве примера возьмем лабораторную про PCA (practice_8-2).
+
+Сразу уберем из нее части, связанные с исследованием, т.е. те, где мы смотрим на данные, строим разведочный график, пробуем разные реализации одного и того же метода, выводим в консоль результаты и т.д. Используются данные о колледжах
+
+```{r}
+library(ISLR)
+data <- College
+
+set.seed(345)
+data.test.ind = sample(seq_len(nrow(data)), size = nrow(data)*0.2)
+data.test = data[data.test.ind,]
+data.main = data[-data.test.ind,]
+
+library(caret)
+preprocessParams <- preProcess(data.main, method=c("center", "scale", "pca"))
+
+# трансформация данных
+transformed.main <- predict(preprocessParams, data.main)
+transformed.test <- predict(preprocessParams, data.test)
+
+library(ggplot2)
+ggplot() + geom_point(data = transformed.main, aes(x = PC1, y = PC2, color = Private))
+
+#модель
+library(e1071)
+svm_model <- svm(Private~., data = transformed.main)
+
+#Результаты на обучающей 
+svm.PredMain<-predict(svm_model, transformed.main, probability=FALSE)
+cmMain = confusionMatrix(svm.PredMain,transformed.main$Private)
+cmMain$overall
+#и тестовой выборках
+svm.PredTest<-predict(svm_model, transformed.test, probability=FALSE)
+cmTest = confusionMatrix(svm.PredTest,transformed.test$Private)
+cmTest$overall
+
+rbind(t(cmMain$overall), t(cmTest$overall))
+```
+
+Теперь будем преобразовывать этот код в приложение.
+
+1) **Что хотим:** приложение, которое строит svm модель для предсказания частный колледж или государственный (Private) с использованием метода PCA для преобразования переменных. В качестве результата -- таблица с метриками на обучающей и тестовой выборке
+2) **Что может менять пользователь:** значение set.seed + какие переменные использовать для предсказания
+
+
+####Начинаем...
+
+Интерфейс:
+
+* поле для ввода set.seed
+* список для выбора переменных
+* таблица с результатами на тестовой выборке и обучающей выборке
+
+В этот раз данные используем и в интерфейсе тоже, поэтому определяем их **вне** функций:
+
+```{r eval = F}
+library(ISLR)
+dataInitial <- College
+
+ui <- fluidPage(
+   titlePanel("Пример работы с PCA"),
+   sidebarLayout(
+      sidebarPanel(
+         numericInput("seed",
+                     "Установите set.seed",
+                     min = 1,
+                     value = 1325),
+         selectInput("varnames",
+                     "Выберите переменные для анализа",
+                     choices = names(dataInitial)[-1],  #удаляем Private из списка выбора
+                     multiple = TRUE)   # для выбора нескольких элементов списка
+         
+      ),
+      mainPanel(
+         tableOutput("metrics")
+      )
+   )
+)
+```
+   
+Сервер: нам нужна таблица
+
+```{r eval = F}
+server <- function(input, output) {
+   
+   output$metrics <- renderTable({ })
+}
+```
+
+
+За создание собственно таблицы с результатами отвечает только последняя строка, поэтому ее вносим внутрь функции renderTable
+
+```{r eval = F}
+server <- function(input, output) {
+   
+   output$metrics <- renderTable({
+     rbind(t(cmMain$overall), t(cmTest$overall))
+   })
+}
+```
+
+  * А куда все остальное?
+  
+  Просто вынести в начало функции server мы не можем -- там есть элементы, которые меняются от действий пользователя. С другой стороны, к выводу таблиц с результатами эти действия тоже не особо относятся.
+  
+  Для таких случаев существует функция reactive, которая реагирует на действия пользователя, но ничего не меняет в интерфейсе. Реакцию на разные действия лучше выносить в разные функции -- так эффективнее
+  
+   * hint: загрузите пакеты ДО функции, описывающей действия сервера
+   
+```{r eval = F}
+server <- function(input, output) {
+  
+  selectedData <- reactive({
+    #выбор переменных
+  })
+  
+  trainTest = reactive({
+    # разбиение обучающая-тестовая
+  })
+
+  transformation <- reactive({
+    #преобразование данных
+  })
+   
+   output$metrics <- renderTable({
+     rbind(t(cmMain$overall), t(cmTest$overall))
+   })
+}
+
+```
+
+Реализуем эти функции
+
+```{r eval = F}
+server <- function(input, output) {
+   dataSelected <- reactive({
+     if (length(input$varnames)<2) dataInitial  # если выбрано меньше 2 предикторов
+     else dplyr::select(dataInitial, c(input$varnames, "Private")) # выбираем переменные и добавляем Private к данным
+  })
+  
+  trainTest = reactive({
+    data = dataSelected()
+    set.seed(input$seed)
+    data.test.ind = sample(seq_len(nrow(data)), size = nrow(data)*0.2)
+    data.test.ind
+  })
+  
+  transformation <- reactive({
+    data = dataSelected()
+    data.test = data[trainTest(),]
+    data.main = data[-trainTest(),]
+    preprocessParams <- preProcess(data.main, method=c("center", "scale", "pca"))
+    transformed.main <- predict(preprocessParams, data.main)
+    transformed.test <- predict(preprocessParams, data.test)
+    svm_model <- svm(Private~., data = transformed.main)
+    #Результаты на обучающей 
+    svm.PredMain<-predict(svm_model, transformed.main, probability=FALSE)
+    cmMain = confusionMatrix(svm.PredMain,transformed.main$Private)
+    #и тестовой выборках
+    svm.PredTest<-predict(svm_model, transformed.test, probability=FALSE)
+    cmTest = confusionMatrix(svm.PredTest,transformed.test$Private)
+    rbind(t(cmMain$overall), t(cmTest$overall))
+  })
+
+   output$metrics <- renderTable({
+     transformation()
+   })
+}
+```
+
+**Ваша очередь:** Добавьте в PCA отбор количества признаков по порогу `thresh = ...`, задаваемому пользователем. Пример из лабораторной по  PCA
+
+```{r}
+preprocessParams3 <- preProcess(dplyr::select(data.main, -Private),
+                                method=c("center", "scale", "pca"), thresh = 0.8)
+```
+
+#### Использование ранее преобразованных данных
+
+А если мы не хотим разрешать пользователю менять параметры данных? Тогда все преобразования лучше сделать заранее, сохранить результат с помощью save(), а затем просто использовать
+
+Например, мы хотим попробовать разные алгоритмы классификации, но выполнять их на одинаково преобразованных данных после PCA. Т.е. нам нужны только `transformed.main` и `transformed.test`. И не важно, как мы их получили
+
+```{r}
+save(transformed.main, transformed.test, file = "pca.Rdata")
+```
+
+Переносим файл в папку с новым приложением. Загрузить объекты можно с помощью load()
+
+```{r eval = F}
+server <- function(input, output) {
+  
+  load("pca.Rdata")
+
+   output$metrics <- renderTable({
+     #построение моделей
+   })
+
+}
+```
+
+**Ваша очередь:** Реализуйте вычисления для разных алгоритмов классификации
+
+* hint: разные команды для разного выбора методов можно реализовать с помощью switch()
